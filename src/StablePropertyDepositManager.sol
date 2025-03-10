@@ -114,7 +114,10 @@ contract StablePropertyDepositManager is ERC721, Ownable {
         uint256 max_ltv_ratio,
         uint256 type_id,
         address depositor
-    ) onlyOwner external returns (uint256 propertyId) {
+    ) 
+// onlyOwner 
+external returns 
+(uint256 propertyId) {
         propertyId = _nextPropertyId++;
         
         Property storage property = _properties[propertyId];

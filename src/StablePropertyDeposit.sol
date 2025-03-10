@@ -5,7 +5,11 @@ import { ERC721 } from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
+
 import { USDX } from "./USDX.sol";
+
+import "@BokkyPooBahsDateTimeLibrary/BokkyPooBahsDateTimeLibrary.sol";
 
 // 2 yr loan, repaid monthly interest only
 // 
@@ -19,6 +23,7 @@ import { USDX } from "./USDX.sol";
 // If depegs in the lower direction then borrowers swap into usdx and repay their loan with usdx
 // If depegs in the higher direction then borrowers swap out of usdx and repay their loan with usdc/usdt
 
+
 contract StablePropertyDepositManager is ERC721, Ownable {
     using SafeERC20 for IERC20Metadata;
     
@@ -31,8 +36,6 @@ contract StablePropertyDepositManager is ERC721, Ownable {
     }
     
     struct Month {
-        // false before initialized. must be true before any operations can be done
-        bool initialized;
         // Amount of USDX owed by property at start of the month
         uint256 starting_outstanding_debt;
         // Amount of USDX owed by property at end of the month
@@ -45,11 +48,12 @@ contract StablePropertyDepositManager is ERC721, Ownable {
         // will be false until after the end of the month where a function can be called
         // that will complete the calculation for the month.
         bool fully_tabulated;
-        // bool that tracks whether or not the interest has been payed late.
-        // initially is false, can be set to true if 
-        bool late_payment;
+        // starting and ending timestamps for the month
+        uint256 starting_timestamp;
+        uint256 ending_timestamp;
         // list of event changes for a particular event
         DebtChangeEvent[] debt_change_events;
+        
     }
 
     // Information about the property
@@ -60,8 +64,8 @@ contract StablePropertyDepositManager is ERC721, Ownable {
         uint256 outstanding_debt;
         // amount of liens discovered against the property
         uint256 outstanding_liens;
-        // max ratio that users allowed to borrow against
-        uint256 debt_limit;
+        // max ratio of (value - lients) that users allowed to borrow against
+        uint256 max_ltv;
         // property category
         uint256 type_id;
         // has the property been withdrawn
@@ -103,22 +107,23 @@ contract StablePropertyDepositManager is ERC721, Ownable {
     ) onlyOwner external {
         uint256 tokenId = _nextPropertyId++;
         
-        uint256 loan_value = (value - liens) * max_ltv / 1e9;
-        uint256 new_debt = loan_value * 1060000000 / 1e9 * 2;
         _properties[tokenId] = Property({
             value: value,
+            outstanding_debt: 0,
             outstanding_liens: liens,
-            outstanding_debt: new_debt,
-            repaid_debt: 0,
-            max_ltv_ratio: max_ltv,
+            max_ltv: max_ltv,
             type_id: type_id,
+            is_withdrawn: false,
             depositor: depositor,
-            is_withdrawn: false
+            deposit_timestamp: block.timestamp,
+            borrow_history: new Month[](0)
         });
 
-        _usdx_address.mint(depositor, loan_value);
-
         _mint(depositor, tokenId);
+    }
+    
+    function withdraw(uint256 x) external {
+
     }
 
     // Property owner can make payment with a given stablecoin
@@ -133,7 +138,6 @@ contract StablePropertyDepositManager is ERC721, Ownable {
 
         Property storage property = _properties[propertyId];
         require(!property.is_withdrawn, "Property Already Withdrawn");
-        property.repaid_debt += normalized_payment;
     }
 
     // Increases amount to owed if a payment is missed
@@ -149,7 +153,7 @@ contract StablePropertyDepositManager is ERC721, Ownable {
         require(!property.is_withdrawn, "Property Already Withdrawn");
 
         require(msg.sender == property.depositor, "Only Callable By Depositor");
-        require(property.repaid_debt >= property.outstanding_debt, "Debt Not Repaid");
+        //require(property.repaid_debt >= property.outstanding_debt, "Debt Not Repaid");
         
         property.is_withdrawn = true;
         // emit withdrawn event
@@ -186,7 +190,67 @@ contract StablePropertyDepositManager is ERC721, Ownable {
         }
     }
 
-    function getCurrentMonth() {
+    function getCurrentMonth(uint256 starting_timestamp) internal view returns (uint256) {
+        return BokkyPooBahsDateTimeLibrary.diffMonths(starting_timestamp, block.timestamp);
+    }
+
+    // Per property
+    // keep track of 24 months
+    // each month keep track of all borrows and repayments
+
+    function ensureDebtHistoryTabulated(uint256 propertyId) public {
+        Property storage property = _properties[propertyId];
+        Month[] storage borrow_history = property.borrow_history;
+
+        // 
+        uint256 current_month = getCurrentMonth(property.deposit_timestamp);
+        bool has_finished = current_month > 24;
+        uint256 should_be_up_to = Math.min(current_month + 1, 24);
+
+        if (borrow_history.length != should_be_up_to) {
+            uint256 last_idx = borrow_history.length;
+            while (borrow_history.length < should_be_up_to) {
+                // build history
+                Month storage last_month = borrow_history[last_idx];
+                if (!last_month.fully_tabulated) {
+                    // fully tabulate last month
+                    tabulate_monthly_interest(last_month);
+                }
+                borrow_history.push(Month({
+                    starting_outstanding_debt: last_month.ending_outstanding_debt + last_month.interest_owed_for_month,
+                    ending_outstanding_debt: 0,
+                    interest_owed_for_month: 0,
+                    fully_tabulated: false,
+                    starting_timestamp: 0,
+                    ending_timestamp: 0,
+                    debt_change_events: new DebtChangeEvent[](0)
+                }));
+                last_idx += 1;
+            }
+        }
+
+        if (has_finished) {
+            if (!borrow_history[24].fully_tabulated) {
+                // tabulate final month
+                tabulate_monthly_interest(borrow_history[24]);
+            }
+        }
+    }
+
+    function tabulate_monthly_interest(Month storage month) internal {
+        // renting money by the dollar * seconds
+        // 0.06 per yr
+        // 0.00016438356 per second
+        uint256 rate  = 1_000_164_383_56;
+        uint256 denom = 1_000_000_000_00;
         
+        DebtChangeEvent[] storage events = month.debt_change_events;
+        if (events.length > 0) {
+            uint256 dollar_seconds = 0;
+        } else {
+            month.fully_tabulated = true;
+            uint256 elapsed_s = month.ending_timestamp - month.starting_timestamp;
+            month.ending_outstanding_debt = month.starting_outstanding_debt * elapsed_s * rate / denom;
+        }
     }
 }

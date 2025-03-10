@@ -101,36 +101,34 @@ contract StablePropertyDepositManager is ERC721, Ownable {
     constructor(
         address stable_manager_,
         USDX usdx_ 
-    ) ERC721("Stable Property Deposit", "SPD") Ownable(stable_manager_) {
+    ) ERC721("Stable Property Deposit Manager", "SPD") Ownable(stable_manager_) {
         _usdx = usdx_;
     }
 
     // Core Property Functionality
 
     // called by manager address to deposit the house
-    function depositHouse(
+    function depositProperty(
         uint256 value,
         uint256 liens,
         uint256 max_ltv_ratio,
         uint256 type_id,
         address depositor
-    ) onlyOwner external {
-        uint256 propertyId = _nextPropertyId++;
+    ) onlyOwner external returns (uint256 propertyId) {
+        propertyId = _nextPropertyId++;
         
-        _properties[propertyId] = Property({
-            value: value,
-            outstanding_debt: 0,
-            outstanding_liens: liens,
-            max_ltv_ratio: max_ltv_ratio,
-            type_id: type_id,
-            is_withdrawn: false,
-            depositor: depositor,
-            deposit_timestamp: block.timestamp,
-            borrow_history: new Month[](0),
-            prepaid_interest: 0,
-            unpaid_interest: 0,
-            n_missed_payments: 0
-        });
+        Property storage property = _properties[propertyId];
+        property.value = value;
+        property.outstanding_debt = 0;
+        property.outstanding_liens = liens;
+        property.max_ltv_ratio = max_ltv_ratio;
+        property.type_id = type_id;
+        property.is_withdrawn = false;
+        property.depositor = depositor;
+        property.deposit_timestamp = block.timestamp;
+        property.prepaid_interest = 0;
+        property.unpaid_interest = 0;
+        property.n_missed_payments = 0;
 
         ensureDebtHistoryTabulated(propertyId);
 
@@ -305,31 +303,28 @@ contract StablePropertyDepositManager is ERC721, Ownable {
             uint256 idx = borrow_history.length;
             while (borrow_history.length < should_be_up_to) {
                 // build history
+                
                 if (idx == 0) {
-                    borrow_history.push(Month({
-                        starting_outstanding_debt: 0,
-                        ending_outstanding_debt: 0,
-                        interest_owed_for_month: 0,
-                        fully_tabulated: false,
-                        starting_timestamp: property.deposit_timestamp,
-                        ending_timestamp: BokkyPooBahsDateTimeLibrary.addMonths(property.deposit_timestamp, 1) - 1,
-                        debt_change_events: new DebtChangeEvent[](0)
-                    }));
+                    Month storage month = borrow_history.push();
+                    month.starting_outstanding_debt = 0;
+                    month.ending_outstanding_debt = 0;
+                    month.interest_owed_for_month = 0;
+                    month.fully_tabulated = false;
+                    month.starting_timestamp = property.deposit_timestamp;
+                    month.ending_timestamp = BokkyPooBahsDateTimeLibrary.addMonths(property.deposit_timestamp, 1) - 1;
                 } else {
                     Month storage last_month = borrow_history[idx - 1];
                     if (!last_month.fully_tabulated) {
                         // fully tabulate last month
                         tabulate_monthly_interest(property, last_month);
                     }
-                    borrow_history.push(Month({
-                        starting_outstanding_debt: last_month.ending_outstanding_debt,
-                        ending_outstanding_debt: 0,
-                        interest_owed_for_month: 0,
-                        fully_tabulated: false,
-                        starting_timestamp: BokkyPooBahsDateTimeLibrary.addMonths(property.deposit_timestamp, idx),
-                        ending_timestamp: BokkyPooBahsDateTimeLibrary.addMonths(property.deposit_timestamp, idx + 1) - 1,
-                        debt_change_events: new DebtChangeEvent[](0)
-                    }));
+                    Month storage month = borrow_history.push();
+                    month.starting_outstanding_debt = last_month.ending_outstanding_debt;
+                    month.ending_outstanding_debt = 0;
+                    month.interest_owed_for_month = 0;
+                    month.fully_tabulated = false;
+                    month.starting_timestamp = BokkyPooBahsDateTimeLibrary.addMonths(property.deposit_timestamp, idx);
+                    month.ending_timestamp = BokkyPooBahsDateTimeLibrary.addMonths(property.deposit_timestamp, idx + 1) - 1;
                 }
                 idx += 1;
             }

@@ -33,6 +33,8 @@ contract StablePropertyDepositManager is ERC721, Ownable {
         bool is_borrow;
         // amount of the debt change
         uint256 value;
+        // unix epoch of borrow
+        uint256 timestamp;
     }
     
     struct Month {
@@ -64,8 +66,8 @@ contract StablePropertyDepositManager is ERC721, Ownable {
         uint256 outstanding_debt;
         // amount of liens discovered against the property
         uint256 outstanding_liens;
-        // max ratio of (value - lients) that users allowed to borrow against
-        uint256 max_ltv;
+        // max ratio of (value - liens) that users allowed to borrow against
+        uint256 max_ltv_ratio;
         // property category
         uint256 type_id;
         // has the property been withdrawn
@@ -74,6 +76,14 @@ contract StablePropertyDepositManager is ERC721, Ownable {
         address depositor;
         // unix timestamp when property was completed
         uint256 deposit_timestamp;
+        // increment when users make interest payments
+        // interest will be subtracted from here each month
+        uint256 prepaid_interest;
+        // if users are charged interest but dont have any prepaid interest
+        // it will be marked as unpaid in this variable.
+        uint256 unpaid_interest;
+        // number of times a payment has been missed
+        uint8 n_missed_payments;
         // history of borrows and repayments
         Month[] borrow_history;
     }
@@ -83,16 +93,16 @@ contract StablePropertyDepositManager is ERC721, Ownable {
     uint256 private _nextPropertyId = 0;
     
     // address of usdx
-    USDX private _usdx_address;
+    USDX private _usdx;
 
     // Stablecoins that are accepted for repayment
     mapping(IERC20Metadata => IERC20Metadata) private _accepted_stablecoins;
     
     constructor(
         address stable_manager_,
-        USDX usdx_address_ 
+        USDX usdx_ 
     ) ERC721("Stable Property Deposit", "SPD") Ownable(stable_manager_) {
-        _usdx_address = usdx_address_;
+        _usdx = usdx_;
     }
 
     // Core Property Functionality
@@ -101,59 +111,138 @@ contract StablePropertyDepositManager is ERC721, Ownable {
     function depositHouse(
         uint256 value,
         uint256 liens,
-        uint256 max_ltv,
+        uint256 max_ltv_ratio,
         uint256 type_id,
         address depositor
     ) onlyOwner external {
-        uint256 tokenId = _nextPropertyId++;
+        uint256 propertyId = _nextPropertyId++;
         
-        _properties[tokenId] = Property({
+        _properties[propertyId] = Property({
             value: value,
             outstanding_debt: 0,
             outstanding_liens: liens,
-            max_ltv: max_ltv,
+            max_ltv_ratio: max_ltv_ratio,
             type_id: type_id,
             is_withdrawn: false,
             depositor: depositor,
             deposit_timestamp: block.timestamp,
-            borrow_history: new Month[](0)
+            borrow_history: new Month[](0),
+            prepaid_interest: 0,
+            unpaid_interest: 0,
+            n_missed_payments: 0
         });
 
-        _mint(depositor, tokenId);
+        ensureDebtHistoryTabulated(propertyId);
+
+        _mint(depositor, propertyId);
+    }
+
+    // Called by Depositor or Stable to borrow against the property.
+    function borrow(uint256 propertyId, uint256 value) external {
+        require(propertyId < _nextPropertyId, "Invalid Property ID");
+        require(value > 0, "Invalid Value");
+
+        Property storage property = _properties[propertyId];
+        require(!property.is_withdrawn, "Property Already Withdrawn");
+        require(!hasAccountExpired(propertyId), "Property Expired");
+        require(
+            msg.sender == property.depositor || msg.sender == owner(),
+            "Only Callable by Depositor or Owner"
+        );
+        require(property.n_missed_payments < 3, "Missed Too Many Payments");
+
+        ensureDebtHistoryTabulated(propertyId);
+
+        uint256 new_borrow_amt = property.outstanding_debt + value;
+        require(
+            new_borrow_amt <= (property.value - property.outstanding_debt) * property.max_ltv_ratio / 1e9,
+            "Borrowing Exceeds Max LTV"
+        );
+        
+        // add borrow to events
+        Month storage month = property.borrow_history[property.borrow_history.length - 1];
+        month.debt_change_events.push(DebtChangeEvent({
+            is_borrow: true,
+            value: value,
+            timestamp: block.timestamp
+        }));
+
+        // emit events
+        _usdx.mint(msg.sender, value);
+    }
+
+    // Property owner can repay the borrow with any accepted stablecoin
+    function repayBorrow(uint256 propertyId, IERC20Metadata stablecoinAddress, uint256 payment) external {
+        require(isStablecoinAccepted(stablecoinAddress), "Stablecoin Not Accepted");
+        require(propertyId < _nextPropertyId, "Invalid Property ID");
+
+        Property storage property = _properties[propertyId];
+        require(!property.is_withdrawn, "Property Already Withdrawn");
+
+        ensureDebtHistoryTabulated(propertyId);
+
+        if (address(stablecoinAddress) == address(_usdx)) {
+            _usdx.burn(payment);
+        } else {
+            stablecoinAddress.safeTransferFrom(msg.sender, owner(), payment);
+        }
+
+        uint8 decimals = stablecoinAddress.decimals();
+        uint256 normalized_payment = normalizePayment(decimals, payment);
+        require(normalized_payment > 0, "Normalized Payment Cannot be Zero");
+
+        require(normalized_payment <= property.outstanding_debt, "Cannot Overpay Debt");
+        property.outstanding_debt -= normalized_payment;
+
+        Month storage month = property.borrow_history[property.borrow_history.length - 1];
+        month.debt_change_events.push(DebtChangeEvent({
+            is_borrow: false,
+            value: normalized_payment,
+            timestamp: block.timestamp
+        }));
+        // emit events
     }
     
-    function withdraw(uint256 x) external {
-
-    }
-
     // Property owner can make payment with a given stablecoin
     function makePayment(uint256 propertyId, IERC20Metadata stablecoinAddress, uint256 payment) external {
         require(isStablecoinAccepted(stablecoinAddress), "Stablecoin Not Accepted");
         require(propertyId < _nextPropertyId, "Invalid Property ID");
 
-        uint8 decimals = stablecoinAddress.decimals();
-        uint256 normalized_payment = normalizePayment(decimals, payment);
-        
-        stablecoinAddress.safeTransferFrom(msg.sender, owner(), normalized_payment);
-
         Property storage property = _properties[propertyId];
         require(!property.is_withdrawn, "Property Already Withdrawn");
-    }
-
-    // Increases amount to owed if a payment is missed
-    function checkPayment() external {
         
+        ensureDebtHistoryTabulated(propertyId);
+
+        if (address(stablecoinAddress) == address(_usdx)) {
+            _usdx.burn(payment);
+        } else {
+            stablecoinAddress.safeTransferFrom(msg.sender, owner(), payment);
+        }
+
+        uint8 decimals = stablecoinAddress.decimals();
+        uint256 normalized_payment = normalizePayment(decimals, payment);
+        require(normalized_payment > 0, "Normalized Payment Cannot be Zero");
+        
+        // If the payment more than covers unpaid interest then pay all the interest
+        // and move the rest into prepaid interest. Otherwise just subtract it from
+        // unpaid interest.
+        if (normalized_payment > property.unpaid_interest) {
+            property.prepaid_interest += normalized_payment - property.unpaid_interest;
+            property.unpaid_interest = 0;
+        } else {
+            property.unpaid_interest -= normalized_payment;
+        }
     }
 
     // Increment 
-    function withdrawHouse(uint256 propertyId) external {
+    function withdrawProperty(uint256 propertyId) external {
         require(propertyId < _nextPropertyId, "Invalid Property ID");
 
         Property storage property = _properties[propertyId];
         require(!property.is_withdrawn, "Property Already Withdrawn");
 
         require(msg.sender == property.depositor, "Only Callable By Depositor");
-        //require(property.repaid_debt >= property.outstanding_debt, "Debt Not Repaid");
+        require(property.outstanding_debt == 0, "Outstanding Debt must be Zero");
         
         property.is_withdrawn = true;
         // emit withdrawn event
@@ -169,7 +258,7 @@ contract StablePropertyDepositManager is ERC721, Ownable {
     }
 
     function isStablecoinAccepted(IERC20Metadata stablecoinAddress) private view returns(bool) {
-        return (stablecoinAddress == _usdx_address) ||
+        return (stablecoinAddress == _usdx) ||
             (_accepted_stablecoins[stablecoinAddress] != IERC20Metadata(address(0)));
     }
 
@@ -193,64 +282,113 @@ contract StablePropertyDepositManager is ERC721, Ownable {
     function getCurrentMonth(uint256 starting_timestamp) internal view returns (uint256) {
         return BokkyPooBahsDateTimeLibrary.diffMonths(starting_timestamp, block.timestamp);
     }
+    
+    function hasAccountExpired(uint256 propertyId) public view returns (bool) {
+        require(propertyId < _nextPropertyId, "Invalid Property ID");
 
-    // Per property
-    // keep track of 24 months
-    // each month keep track of all borrows and repayments
+        Property storage property = _properties[propertyId];
+
+        return getCurrentMonth(property.deposit_timestamp) > 24;
+    }
 
     function ensureDebtHistoryTabulated(uint256 propertyId) public {
+        require(propertyId < _nextPropertyId, "Invalid Property ID");
+
         Property storage property = _properties[propertyId];
         Month[] storage borrow_history = property.borrow_history;
 
-        // 
         uint256 current_month = getCurrentMonth(property.deposit_timestamp);
         bool has_finished = current_month > 24;
         uint256 should_be_up_to = Math.min(current_month + 1, 24);
 
         if (borrow_history.length != should_be_up_to) {
-            uint256 last_idx = borrow_history.length;
+            uint256 idx = borrow_history.length;
             while (borrow_history.length < should_be_up_to) {
                 // build history
-                Month storage last_month = borrow_history[last_idx];
-                if (!last_month.fully_tabulated) {
-                    // fully tabulate last month
-                    tabulate_monthly_interest(last_month);
+                if (idx == 0) {
+                    borrow_history.push(Month({
+                        starting_outstanding_debt: 0,
+                        ending_outstanding_debt: 0,
+                        interest_owed_for_month: 0,
+                        fully_tabulated: false,
+                        starting_timestamp: property.deposit_timestamp,
+                        ending_timestamp: BokkyPooBahsDateTimeLibrary.addMonths(property.deposit_timestamp, 1) - 1,
+                        debt_change_events: new DebtChangeEvent[](0)
+                    }));
+                } else {
+                    Month storage last_month = borrow_history[idx - 1];
+                    if (!last_month.fully_tabulated) {
+                        // fully tabulate last month
+                        tabulate_monthly_interest(property, last_month);
+                    }
+                    borrow_history.push(Month({
+                        starting_outstanding_debt: last_month.ending_outstanding_debt,
+                        ending_outstanding_debt: 0,
+                        interest_owed_for_month: 0,
+                        fully_tabulated: false,
+                        starting_timestamp: BokkyPooBahsDateTimeLibrary.addMonths(property.deposit_timestamp, idx),
+                        ending_timestamp: BokkyPooBahsDateTimeLibrary.addMonths(property.deposit_timestamp, idx + 1) - 1,
+                        debt_change_events: new DebtChangeEvent[](0)
+                    }));
                 }
-                borrow_history.push(Month({
-                    starting_outstanding_debt: last_month.ending_outstanding_debt + last_month.interest_owed_for_month,
-                    ending_outstanding_debt: 0,
-                    interest_owed_for_month: 0,
-                    fully_tabulated: false,
-                    starting_timestamp: 0,
-                    ending_timestamp: 0,
-                    debt_change_events: new DebtChangeEvent[](0)
-                }));
-                last_idx += 1;
+                idx += 1;
             }
         }
 
         if (has_finished) {
             if (!borrow_history[24].fully_tabulated) {
                 // tabulate final month
-                tabulate_monthly_interest(borrow_history[24]);
+                tabulate_monthly_interest(property, borrow_history[24]);
             }
         }
     }
 
-    function tabulate_monthly_interest(Month storage month) internal {
+    function tabulate_monthly_interest(Property storage property, Month storage month) internal {
         // renting money by the dollar * seconds
-        // 0.06 per yr
-        // 0.00016438356 per second
+        // 0.06 per dollar * yr
+        // 0.00016438356 per dollar * second
         uint256 rate  = 1_000_164_383_56;
         uint256 denom = 1_000_000_000_00;
+        require(!month.fully_tabulated);
         
         DebtChangeEvent[] storage events = month.debt_change_events;
+        uint256 dollar_seconds = 0;
+        uint256 amt_borrowed = month.starting_outstanding_debt;
         if (events.length > 0) {
-            uint256 dollar_seconds = 0;
+            uint256 idx = 0;
+            uint256 last_timestamp = month.starting_timestamp;
+            while (idx < events.length) {
+                DebtChangeEvent storage current_event = events[idx];
+                dollar_seconds += amt_borrowed * (current_event.timestamp - last_timestamp);
+                
+                last_timestamp = current_event.timestamp;
+                amt_borrowed = current_event.is_borrow ?
+                    amt_borrowed + current_event.value :
+                    amt_borrowed - current_event.value;
+                idx += 1;
+            }
+
+            dollar_seconds += amt_borrowed * (month.ending_timestamp - last_timestamp);
         } else {
-            month.fully_tabulated = true;
-            uint256 elapsed_s = month.ending_timestamp - month.starting_timestamp;
-            month.ending_outstanding_debt = month.starting_outstanding_debt * elapsed_s * rate / denom;
+            dollar_seconds = amt_borrowed * (month.ending_timestamp - month.starting_timestamp);
         }
+
+        uint256 monthly_interest = dollar_seconds * rate * denom;
+
+        month.interest_owed_for_month = monthly_interest;
+        month.ending_outstanding_debt = amt_borrowed;
+
+        // charge interest
+        if (monthly_interest > property.prepaid_interest) {
+            property.n_missed_payments += 1;
+            property.unpaid_interest += monthly_interest - property.prepaid_interest;
+            property.prepaid_interest = 0;
+            // emit events
+        } else {
+            property.prepaid_interest -= monthly_interest;
+            // emit events
+        }
+
+        month.fully_tabulated = true;
     }
 }

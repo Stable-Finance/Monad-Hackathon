@@ -12,6 +12,10 @@ contract USDX is ERC20, Ownable {
         _mint(account, value);
     }
 
+    function burn(uint256 value) external {
+        _burn(msg.sender, value);
+    }
+
     function decimals() public pure override returns(uint8) {
         return 6;
     }

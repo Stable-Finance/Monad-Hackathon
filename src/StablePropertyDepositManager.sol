@@ -117,6 +117,8 @@ contract StablePropertyDepositManager is ERC721, Ownable {
     ) onlyOwner external returns (uint256 propertyId) {
         propertyId = _nextPropertyId++;
         
+        require(max_ltv_ratio <= 1e9, "LTV Ratio should be 9 Decimals and less than 1");
+
         Property storage property = _properties[propertyId];
         property.value = value;
         property.outstanding_debt = 0;
@@ -153,10 +155,13 @@ contract StablePropertyDepositManager is ERC721, Ownable {
 
         uint256 new_borrow_amt = property.outstanding_debt + value;
         require(
-            new_borrow_amt <= (property.value - property.outstanding_debt) * property.max_ltv_ratio / 1e9,
+            new_borrow_amt <= ((property.value - property.outstanding_debt) * property.max_ltv_ratio / 1e9),
             "Borrowing Exceeds Max LTV"
         );
         
+        // Make Borrow
+        property.outstanding_debt += value;
+
         // add borrow to events
         Month storage month = property.borrow_history[property.borrow_history.length - 1];
         month.debt_change_events.push(DebtChangeEvent({
@@ -190,6 +195,7 @@ contract StablePropertyDepositManager is ERC721, Ownable {
         require(normalized_payment > 0, "Normalized Payment Cannot be Zero");
 
         require(normalized_payment <= property.outstanding_debt, "Cannot Overpay Debt");
+
         property.outstanding_debt -= normalized_payment;
 
         Month storage month = property.borrow_history[property.borrow_history.length - 1];

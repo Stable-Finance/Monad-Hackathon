@@ -9,22 +9,16 @@ import { Upgrades } from "openzeppelin-foundry-upgrades/Upgrades.sol";
 
 contract DeployScript is Script {
     function setUp() public {}
+    USDX usdx = USDX(0xD875Ba8e2caD3c0f7e2973277C360C8d2f92B510);
 
     function run() public {
         uint256 deployerPrivateKey = vm.envUint("MONAD_PRIVKEY");
         vm.startBroadcast(deployerPrivateKey);
 
-        
-        USDX usdx = USDX(Upgrades.deployTransparentProxy(
-            "USDX.sol",
-            vm.addr(deployerPrivateKey),
-            abi.encodeCall(USDX.initialize, (vm.addr(deployerPrivateKey)))
-        ));
-
         URILibrary lib = new URILibrary();
 
         StablePropertyDepositManagerV1 deposit_mgr = StablePropertyDepositManagerV1(Upgrades.deployTransparentProxy(
-            "StablePropertyDepositManager.sol",
+            "StablePropertyDepositManagerV1.sol",
             vm.addr(deployerPrivateKey),
             abi.encodeCall(StablePropertyDepositManagerV1.initialize, (vm.addr(deployerPrivateKey), usdx, lib))
         ));

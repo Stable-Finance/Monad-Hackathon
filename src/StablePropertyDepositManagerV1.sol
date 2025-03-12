@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import { ERC721 } from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import { ERC721Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol";
+import { ERC721EnumerableUpgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { PropertyInfo, DebtChangeEvent, Month, Property } from "./IStablePropertyDepositManagerV1.sol";
+
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
 import { USDX } from "./USDX.sol";
+import {URILibrary} from "./URILibrary.sol";
+
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 import "@BokkyPooBahsDateTimeLibrary/BokkyPooBahsDateTimeLibrary.sol";
 
@@ -24,73 +30,14 @@ import "@BokkyPooBahsDateTimeLibrary/BokkyPooBahsDateTimeLibrary.sol";
 // If depegs in the higher direction then borrowers swap out of usdx and repay their loan with usdc/usdt
 
 
-contract StablePropertyDepositManager is ERC721, Ownable {
+
+contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ERC721EnumerableUpgradeable {
     using SafeERC20 for IERC20Metadata;
     
-    struct DebtChangeEvent {
-        // true if the change represents the user withdrawing more USDX,
-        // false if its repaying the loan
-        bool is_borrow;
-        // amount of the debt change
-        uint256 value;
-        // unix epoch of borrow
-        uint256 timestamp;
-    }
-    
-    struct Month {
-        // Amount of USDX owed by property at start of the month
-        uint256 starting_outstanding_debt;
-        // Amount of USDX owed by property at end of the month
-        // Will be 0 until interest is fully tabulated at the end of the month
-        uint256 ending_outstanding_debt;
-        // Interest on USDX owed throughout the month.
-        // Will be 0 until after the end of the month the interest is fully tabulated
-        uint256 interest_owed_for_month;
-        // bool that tracks whether or not the interest owed has been calculated
-        // will be false until after the end of the month where a function can be called
-        // that will complete the calculation for the month.
-        bool fully_tabulated;
-        // starting and ending timestamps for the month
-        uint256 starting_timestamp;
-        uint256 ending_timestamp;
-        // list of event changes for a particular event
-        DebtChangeEvent[] debt_change_events;
-        
-    }
-
-    // Information about the property
-    struct Property {
-        // appraised value of the property
-        uint256 value;
-        // amount of debt that depositor owes before they can withdraw
-        uint256 outstanding_debt;
-        // amount of liens discovered against the property
-        uint256 outstanding_liens;
-        // max ratio of (value - liens) that users allowed to borrow against
-        uint256 max_ltv_ratio;
-        // property category
-        uint256 type_id;
-        // has the property been withdrawn
-        bool is_withdrawn;
-        // address that owns the property
-        address depositor;
-        // unix timestamp when property was completed
-        uint256 deposit_timestamp;
-        // increment when users make interest payments
-        // interest will be subtracted from here each month
-        uint256 prepaid_interest;
-        // if users are charged interest but dont have any prepaid interest
-        // it will be marked as unpaid in this variable.
-        uint256 unpaid_interest;
-        // number of times a payment has been missed
-        uint8 n_missed_payments;
-        // history of borrows and repayments
-        Month[] borrow_history;
-    }
     mapping(uint256 => Property) private _properties;
 
     // Next Property ID
-    uint256 private _nextPropertyId = 0;
+    uint256 private _nextPropertyId;
     
     // address of usdx
     USDX private _usdx;
@@ -98,26 +45,38 @@ contract StablePropertyDepositManager is ERC721, Ownable {
     // Stablecoins that are accepted for repayment
     mapping(IERC20Metadata => IERC20Metadata) private _accepted_stablecoins;
     
-    constructor(
-        address stable_manager_,
-        USDX usdx_ 
-    ) ERC721("Stable Property Deposit Manager", "SPD") Ownable(stable_manager_) {
-        _usdx = usdx_;
+    // URI Library
+    URILibrary _uri_library;
+    
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+    
+    function initialize(address stable_manager, USDX usdx, URILibrary uri_library) public initializer {
+        __ERC721_init("Stable Property Deposit Manager", "SPD");
+        __ERC721Enumerable_init();
+        __Ownable_init(stable_manager);
+
+        _usdx = usdx;
+        _uri_library = uri_library;
     }
 
     // Core Property Functionality
 
     // called by manager address to deposit the house
+    // Normally would be onlyOwner to enforce that only stable
+    // can put properties on the chain, this is disabled for now.
     function depositProperty(
         uint256 value,
         uint256 liens,
         uint256 max_ltv_ratio,
         uint256 type_id,
         address depositor
-    ) onlyOwner external returns (uint256 propertyId) {
-        propertyId = _nextPropertyId++;
-        
+    ) external returns (uint256 propertyId) {
         require(max_ltv_ratio <= 1e9, "LTV Ratio should be 9 Decimals and less than 1");
+
+        propertyId = _nextPropertyId++;
 
         Property storage property = _properties[propertyId];
         property.value = value;
@@ -266,7 +225,7 @@ contract StablePropertyDepositManager is ERC721, Ownable {
             (_accepted_stablecoins[stablecoinAddress] != IERC20Metadata(address(0)));
     }
 
-    // Only Stable can transfer properties (note onlyOwner modifier)
+    // Only Stable can transfer properties (enforced by onlyOwner modifier)
     function _checkAuthorized(
         address owner, address spender, uint256 tokenId
     ) onlyOwner internal view override {}
@@ -309,7 +268,6 @@ contract StablePropertyDepositManager is ERC721, Ownable {
             uint256 idx = borrow_history.length;
             while (borrow_history.length < should_be_up_to) {
                 // build history
-                
                 if (idx == 0) {
                     Month storage month = borrow_history.push();
                     month.starting_outstanding_debt = 0;
@@ -322,7 +280,7 @@ contract StablePropertyDepositManager is ERC721, Ownable {
                     Month storage last_month = borrow_history[idx - 1];
                     if (!last_month.fully_tabulated) {
                         // fully tabulate last month
-                        tabulate_monthly_interest(property, last_month);
+                        tabulateMonthlyInterest(property, last_month);
                     }
                     Month storage month = borrow_history.push();
                     month.starting_outstanding_debt = last_month.ending_outstanding_debt;
@@ -339,12 +297,12 @@ contract StablePropertyDepositManager is ERC721, Ownable {
         if (has_finished) {
             if (!borrow_history[24].fully_tabulated) {
                 // tabulate final month
-                tabulate_monthly_interest(property, borrow_history[24]);
+                tabulateMonthlyInterest(property, borrow_history[24]);
             }
         }
     }
 
-    function tabulate_monthly_interest(Property storage property, Month storage month) internal {
+    function tabulateMonthlyInterest(Property storage property, Month storage month) internal {
         // renting money by the dollar * seconds
         // 0.06 per dollar * yr
         // 0.00016438356 per dollar * second
@@ -384,7 +342,7 @@ contract StablePropertyDepositManager is ERC721, Ownable {
             property.n_missed_payments += 1;
             property.unpaid_interest += monthly_interest - property.prepaid_interest;
             property.prepaid_interest = 0;
-            // emit events
+            // emit eventsk
         } else {
             property.prepaid_interest -= monthly_interest;
             // emit events
@@ -392,4 +350,31 @@ contract StablePropertyDepositManager is ERC721, Ownable {
 
         month.fully_tabulated = true;
     }
+
+    // GETTERS
+
+    function getPropertyInfo(uint256 propertyId) public view returns (PropertyInfo memory) {
+        _requireOwned(propertyId);
+        Property storage property = _properties[propertyId];
+
+        return PropertyInfo({
+            value: property.value,
+            outstanding_debt: property.outstanding_debt,
+            outstanding_liens: property.outstanding_liens,
+            max_ltv_ratio: property.max_ltv_ratio,
+            type_id: property.type_id,
+            is_withdrawn: property.is_withdrawn,
+            depositor: property.depositor,
+            deposit_timestamp: property.deposit_timestamp,
+            prepaid_interest: property.prepaid_interest,
+            unpaid_interest: property.unpaid_interest,
+            n_missed_payments: property.n_missed_payments            
+        });
+    }
+    
+    function tokenURI(uint256 propertyId) public view override returns (string memory) {
+        PropertyInfo memory info = getPropertyInfo(propertyId);
+        return _uri_library.tokenURI(propertyId, info);
+    }
+
 }

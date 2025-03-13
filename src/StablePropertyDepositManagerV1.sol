@@ -219,7 +219,7 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         ensureDebtHistoryTabulated(propertyId);
 
         if (address(stablecoinAddress) == address(_usdx)) {
-            IERC20Metadata(_usdx).safeTransferFrom(msg.sender, owner(), payment);
+            IERC20Metadata(_usdx).safeTransferFrom(msg.sender, address(this), payment);
             _usdx.burn(payment);
         } else {
             stablecoinAddress.safeTransferFrom(msg.sender, owner(), payment);

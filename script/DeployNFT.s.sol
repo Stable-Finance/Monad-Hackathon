@@ -26,13 +26,13 @@ contract DeployScript is Script {
             vm.addr(deployerPrivateKey),
             abi.encodeCall(StablePropertyDepositManagerV1.initialize, (vm.addr(deployerPrivateKey), usdx, lib))
         ));
+        console.log("Deposit Manager:");
+        console.logAddress(address(deposit_mgr));
 
         deposit_mgr.addAcceptedStablecoin(usdt);
         deposit_mgr.addAcceptedStablecoin(usdc);
 
         usdx.grantRole(keccak256("MINTER"), address(deposit_mgr));
-
-        console.logAddress(address(usdx));
 
         vm.stopBroadcast();
     }

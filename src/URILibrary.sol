@@ -104,9 +104,9 @@ contract URILibrary {
 
     function normalizePayment(uint8 decimals, uint256 value) external pure returns (uint256) {
         if (decimals >= 6) {
-            return value * (10 ** (decimals - 6));
+            return value / (10 ** (decimals - 6));
         } else {
-            return value / (10 ** (6 - decimals));
+            return value * (10 ** (6 - decimals));
         }
     }
 

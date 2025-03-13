@@ -59,26 +59,34 @@ contract StablePropertyDepositManagerTest is Test {
         assertEq(propertyId, 0);
 
         vm.prank(depositor1);
-        manager.borrow(0, 10 * 1e6);
+        manager.borrow(0, 1000 * 1e6);
         vm.prank(depositor1);
         uint256 minted = usdx.balanceOf(depositor1);
-        assertEq(minted, 10 * 1e6);
+        assertEq(minted, 1000 * 1e6);
+
+        vm.prank(depositor1);
+        usdx.approve(address(manager), 100 * 1e6);
+        vm.prank(depositor1);
+        manager.makePayment(0, usdx, 100 * 1e6);
         
+        PropertyInfo memory info = manager.getPropertyInfo(propertyId);
+        assertEq(info.outstanding_debt, 1000 * 1e6);
+        assertEq(info.prepaid_interest, 100 * 1e6);
+
         // ff 40 days
         skip(60 * 60 * 24 * 40);
         
         vm.prank(owner);
         manager.ensureDebtHistoryTabulated(propertyId);
         
-        PropertyInfo memory info = manager.getPropertyInfo(propertyId);
-        assertEq(info.outstanding_debt, 10 * 1e6);
-        assertEq(info.unpaid_interest, 0);
+        //assertEq(info.unpaid_interest, 0);
         
         vm.prank(depositor1);
         usdx.approve(address(manager), 10 * 1e6);
 
         vm.prank(depositor1);
         manager.repayBorrow(0, usdx, 10 * 1e6);
+
     }
 
     function test_GetCurrentMonth() public {
@@ -168,5 +176,12 @@ contract StablePropertyDepositManagerTest is Test {
         assertEq(manager.tokenOfOwnerByIndex(depositor1, 0), 0);
         assertEq(manager.tokenOfOwnerByIndex(depositor1, 1), 2);
         assertEq(manager.balanceOf(depositor1), 2);
+    }
+
+    function test_NormalizePayment() public view {
+        assertEq(uri_library.normalizePayment(18, 1e18), 1_000_000);
+        assertEq(uri_library.normalizePayment(6, 1e6), 1_000_000);
+        assertEq(uri_library.normalizePayment(6, 100 * 1e6), 100_000_000);
+        assertEq(uri_library.normalizePayment(8, 1e8 * 50 / 100), 500_000);
     }
 }

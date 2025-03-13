@@ -3,7 +3,7 @@ pragma solidity ^0.8.13;
 
 import {Test, console} from "forge-std/Test.sol";
 import { USDX } from "../src/USDX.sol";
-import { URILibrary } from "../src/URILibrary.sol";
+import { HelperLibrary } from "../src/HelperLibrary.sol";
 import { StablePropertyDepositManagerHarness } from "../src/mocks/StablePropertyDepositManagerHarness.sol";
 import { StablePropertyDepositManagerV1 } from "../src/StablePropertyDepositManagerV1.sol";
 import { PropertyInfo } from "../src/IStablePropertyDepositManagerV1.sol";
@@ -11,11 +11,9 @@ import { MockUSDT } from "../src/mocks/MockUSDT.sol";
 
 import { Upgrades } from "openzeppelin-foundry-upgrades/Upgrades.sol";
 
-
-
 contract StablePropertyDepositManagerTest is Test {
     USDX public usdx;
-    URILibrary public uri_library;
+    HelperLibrary public uri_library;
     StablePropertyDepositManagerHarness public manager;
     MockUSDT public usdt;
 
@@ -31,7 +29,7 @@ contract StablePropertyDepositManagerTest is Test {
             abi.encodeCall(USDX.initialize, (owner))
         ));
 
-        uri_library = new URILibrary();
+        uri_library = new HelperLibrary();
 
         manager = StablePropertyDepositManagerHarness(Upgrades.deployTransparentProxy(
             "StablePropertyDepositManagerHarness.sol",

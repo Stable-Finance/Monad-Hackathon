@@ -11,7 +11,7 @@ import { PropertyInfo, DebtChangeEvent, Month, Property } from "./IStablePropert
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
 import { USDX } from "./USDX.sol";
-import {URILibrary} from "./URILibrary.sol";
+import {HelperLibrary} from "./HelperLibrary.sol";
 
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
@@ -85,7 +85,7 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
     mapping(IERC20Metadata => IERC20Metadata) private _accepted_stablecoins;
     
     // URI Library
-    URILibrary _uri_library;
+    HelperLibrary _uri_library;
     
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -97,7 +97,7 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
      * @param usdx Address of USDX token
      * @param uri_library Address of helper library
      */
-    function initialize(address stable_manager, USDX usdx, URILibrary uri_library) public initializer {
+    function initialize(address stable_manager, USDX usdx, HelperLibrary uri_library) public initializer {
         __Ownable_init(stable_manager);
         __ERC721_init("Stable Property Deposit Manager", "SPD");
         __ERC721Enumerable_init();

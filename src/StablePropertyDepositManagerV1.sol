@@ -72,6 +72,7 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         address withdrawer
     );
     
+    // Mapping of nft ids to property structs
     mapping(uint256 => Property) private _properties;
 
     // Next Property ID
@@ -91,6 +92,11 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         _disableInitializers();
     }
     
+    /**
+     * @param stable_manager Owner that is allowed to mint new properties and receives payment
+     * @param usdx Address of USDX token
+     * @param uri_library Address of helper library
+     */
     function initialize(address stable_manager, USDX usdx, URILibrary uri_library) public initializer {
         __Ownable_init(stable_manager);
         __ERC721_init("Stable Property Deposit Manager", "SPD");
@@ -102,9 +108,18 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
 
     // Core Property Functionality
 
-    // called by manager address to deposit the house
-    // Normally would be onlyOwner to enforce that only stable
-    // can put properties on the chain, this is disabled for now.
+    /**
+     * 
+     * called by manager address to deposit the house
+     * Normally would be onlyOwner to enforce that only stable
+     * can put properties on the chain, this is disabled for now.
+     * @param value Value of the property. Denominated in USD with 6 decimals
+     * @param liens Value of liens against the property. Denominated in USD with 6 decimals
+     * @param max_ltv_ratio Floating point with 9 decimals used as an LTV ratio.
+     *  must be less than 1
+     * @param type_id category of property (i.e. AG, Commercial, Residential)
+     * @param depositor Account that will receive the property NFT
+     */
     function depositProperty(
         uint256 value,
         uint256 liens,
@@ -135,7 +150,11 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         emit DepositProperty(propertyId, liens, max_ltv_ratio, type_id, depositor);
     }
 
-    // Called by Depositor or Stable to borrow against the property.
+    /**
+     * Called by Depositor or Stable to borrow against the property.
+     * @param propertyId nft_id of property
+     * @param value amount of USDX to mint. 6 decimals
+     */
     function borrow(uint256 propertyId, uint256 value) external {
         require(propertyId < _nextPropertyId, "Invalid Property ID");
         require(value > 0, "Invalid Value");
@@ -151,6 +170,8 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
 
         ensureDebtHistoryTabulated(propertyId);
 
+        // User should not be able to borrow more than the property is worth,
+        // respecting the LTV ratio and current liens
         uint256 new_borrow_amt = property.outstanding_debt + value;
         require(
             new_borrow_amt <= ((property.value - property.outstanding_debt) * property.max_ltv_ratio / 1e9),
@@ -173,7 +194,14 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         emit USDXBorrowed(propertyId, value, msg.sender);
     }
 
-    // Property owner can repay the borrow with any accepted stablecoin
+    /**
+     * Property owners, or someone on their behalf, can repay the borrow with
+     * any accepted stablecoin. Users need to approve the manager to use their
+     * stablecoin, even for USDX.
+     * @param propertyId nft_id of the property
+     * @param stablecoinAddress Address of token that will be used to repay the loan
+     * @param payment amount of the stablecoin to repay. Denominated in decimals of the stablecoin
+     */
     function repayBorrow(uint256 propertyId, IERC20Metadata stablecoinAddress, uint256 payment) external {
         require(isStablecoinAccepted(stablecoinAddress), "Stablecoin Not Accepted");
         require(propertyId < _nextPropertyId, "Invalid Property ID");
@@ -183,6 +211,7 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
 
         ensureDebtHistoryTabulated(propertyId);
 
+        // Burn USDX, otherwise transfer it to Stable
         if (address(stablecoinAddress) == address(_usdx)) {
             IERC20Metadata(_usdx).safeTransferFrom(msg.sender, address(this), payment);
             _usdx.burn(payment);
@@ -196,8 +225,10 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
 
         require(normalized_payment <= property.outstanding_debt, "Cannot Overpay Debt");
 
+        // Reduce the amount of debt associated with property
         property.outstanding_debt -= normalized_payment;
 
+        // Add borrow to montly borrow history
         Month storage month = property.borrow_history[property.borrow_history.length - 1];
         month.debt_change_events.push(DebtChangeEvent({
             is_borrow: false,
@@ -208,7 +239,13 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         emit USDXRepaid(propertyId, payment, msg.sender);
     }
     
-    // Property owner can make payment with a given stablecoin
+    /**
+     * Property owners can make advance interest payments.
+     * @param propertyId nft_id of property
+     * @param stablecoinAddress address of stablecoin to repay the debt
+     * @param payment value of tokens to transfer. Denominated in decimals
+     * of the contract
+     */
     function makePayment(uint256 propertyId, IERC20Metadata stablecoinAddress, uint256 payment) external {
         require(isStablecoinAccepted(stablecoinAddress), "Stablecoin Not Accepted");
         require(propertyId < _nextPropertyId, "Invalid Property ID");
@@ -218,6 +255,7 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         
         ensureDebtHistoryTabulated(propertyId);
 
+        // Burn USDX and transfer other tokens to the owner
         if (address(stablecoinAddress) == address(_usdx)) {
             IERC20Metadata(_usdx).safeTransferFrom(msg.sender, address(this), payment);
             _usdx.burn(payment);
@@ -242,7 +280,10 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         emit InterestPaymentDeposited(propertyId, payment, msg.sender);
     }
 
-    // Increment 
+    /**
+     * if the user has no more debt the property can be withdrawn
+     * @param propertyId nft_id of property
+     */
     function withdrawProperty(uint256 propertyId) external {
         require(propertyId < _nextPropertyId, "Invalid Property ID");
 

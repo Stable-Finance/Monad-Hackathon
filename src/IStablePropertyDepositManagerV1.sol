@@ -59,6 +59,8 @@ struct Month {
     
 }
 
+// TODO: Deduplicate into interface
+
 // Information about the property
 struct Property {
     // appraised value of the property

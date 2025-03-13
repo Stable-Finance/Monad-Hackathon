@@ -7,9 +7,22 @@ import "@BokkyPooBahsDateTimeLibrary/BokkyPooBahsDateTimeLibrary.sol";
 
 import { PropertyInfo, DebtChangeEvent, Month, Property } from "./IStablePropertyDepositManagerV1.sol";
 
-contract URILibrary {
+/**
+ * @title HelperLibrary
+ * @author Matthew Jurenka <matthew@jurenka.software>
+ * @notice 
+ * 
+ * StablePropertyDepositManagerV1 is a very large contract that is running
+ * up against the size limit, however it still needs these functions.
+ * Thus, we seperate them out into its own contract 
+ */
+contract HelperLibrary {
     using Strings for uint256;
 
+    /**
+     * @param propertyId Nft ID of the property
+     * @param info Information about the property (getPropertyInfo from the deposit manager)
+     */
     function tokenURI(uint256 propertyId, PropertyInfo memory info) external pure returns (string memory) {
         bytes memory dataURI = abi.encodePacked(
             '{',
@@ -81,6 +94,11 @@ contract URILibrary {
         );
     }
 
+    /**
+     * Generate loot-style svg with simple information about the property
+     * @param propertyId Nft ID of the property
+     * @param info Information about the property (getPropertyInfo from the deposit manager)
+     */
     function generateSVG(uint256 propertyId, PropertyInfo memory info) internal pure returns (string memory) {
 
         bytes memory svg = abi.encodePacked(
@@ -102,6 +120,14 @@ contract URILibrary {
         );
     }
 
+    /**
+     * Since USDX has 6 decimals but we want to accept tokens with potentially
+     * different decimals, we need to take those values and normalize them to
+     * the corresponding amount of USDX
+     *  
+     * @param decimals number of decimals on other stablecoin
+     * @param value Amount of the other stablecoin sent
+     */
     function normalizePayment(uint8 decimals, uint256 value) external pure returns (uint256) {
         if (decimals >= 6) {
             return value / (10 ** (decimals - 6));
@@ -110,14 +136,34 @@ contract URILibrary {
         }
     }
 
+    /**
+     * Calculates the number of months that have elapsed since the starting_timestamp.
+     * Note: this goes by boundaries calendar months rather than linear time
+     * 
+     * @param starting_timestamp Start of time period
+     */
     function getCurrentMonth(uint256 starting_timestamp) external view returns (uint256) {
         return BokkyPooBahsDateTimeLibrary.diffMonths(starting_timestamp, block.timestamp);
     }
 
+    /**
+     * Gets a timestamp of the next month
+     * Note: this goes by boundaries calendar months rather than linear time
+     * 
+     * @param timestamp Start of time period
+     * @param n_months number of months to add
+     */
     function addMonths(uint256 timestamp, uint256 n_months) external pure returns (uint256) {
         return BokkyPooBahsDateTimeLibrary.addMonths(timestamp, n_months);
     }
 
+    /**
+     * Calculates how many months between two timestamps
+     * Note: this goes by boundaries calendar months rather than linear time
+     * 
+     * @param start_timestamp Start of time period
+     * @param end_timestamp number of months to add
+     */
     function diffMonths(uint256 start_timestamp, uint256 end_timestamp) external pure returns (uint256) {
         return BokkyPooBahsDateTimeLibrary.diffMonths(start_timestamp, end_timestamp);
     }

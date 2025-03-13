@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "@openzeppelin/contracts/utils/Base64.sol";
+import "@BokkyPooBahsDateTimeLibrary/BokkyPooBahsDateTimeLibrary.sol";
 
 import { PropertyInfo, DebtChangeEvent, Month, Property } from "./IStablePropertyDepositManagerV1.sol";
 
@@ -99,5 +100,25 @@ contract URILibrary {
                 Base64.encode(svg)
             )    
         );
+    }
+
+    function normalizePayment(uint8 decimals, uint256 value) external pure returns (uint256) {
+        if (decimals >= 6) {
+            return value * (10 ** (decimals - 6));
+        } else {
+            return value / (10 ** (6 - decimals));
+        }
+    }
+
+    function getCurrentMonth(uint256 starting_timestamp) external view returns (uint256) {
+        return BokkyPooBahsDateTimeLibrary.diffMonths(starting_timestamp, block.timestamp);
+    }
+
+    function addMonths(uint256 timestamp, uint256 n_months) external pure returns (uint256) {
+        return BokkyPooBahsDateTimeLibrary.addMonths(timestamp, n_months);
+    }
+
+    function diffMonths(uint256 start_timestamp, uint256 end_timestamp) external pure returns (uint256) {
+        return BokkyPooBahsDateTimeLibrary.diffMonths(start_timestamp, end_timestamp);
     }
 }

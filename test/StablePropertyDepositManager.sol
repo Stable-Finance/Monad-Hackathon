@@ -6,6 +6,7 @@ import { USDX } from "../src/USDX.sol";
 import { URILibrary } from "../src/URILibrary.sol";
 import { StablePropertyDepositManagerHarness } from "../src/mocks/StablePropertyDepositManagerHarness.sol";
 import { StablePropertyDepositManagerV1 } from "../src/StablePropertyDepositManagerV1.sol";
+import { PropertyInfo } from "../src/IStablePropertyDepositManagerV1.sol";
 import { MockUSDT } from "../src/mocks/MockUSDT.sol";
 
 import { Upgrades } from "openzeppelin-foundry-upgrades/Upgrades.sol";
@@ -68,26 +69,37 @@ contract StablePropertyDepositManagerTest is Test {
         
         vm.prank(owner);
         manager.ensureDebtHistoryTabulated(propertyId);
+        
+        PropertyInfo memory info = manager.getPropertyInfo(propertyId);
+        assertEq(info.outstanding_debt, 10 * 1e6);
+        assertEq(info.unpaid_interest, 0);
+        
+        vm.prank(depositor1);
+        usdx.approve(address(manager), 10 * 1e6);
+
+        vm.prank(depositor1);
+        manager.repayBorrow(0, usdx, 10 * 1e6);
     }
 
     function test_GetCurrentMonth() public {
         uint256 startTime = 1741645302; // 3:22 PM on Mar 10 Mountain Time 2025
         vm.warp(startTime);
         // start on month 0
-        assertEq(manager.getCurrentMonthHarness(startTime), 0);
+        assertEq(uri_library.getCurrentMonth(startTime), 0);
         
         // ff 21 days to Mar 31, should be month 0
         skip(60 * 60 * 24 * 21);
-        assertEq(manager.getCurrentMonthHarness(startTime), 0);
+        assertEq(uri_library.getCurrentMonth(startTime), 0);
 
         // ff 1 days to Apr 1, should be month 1
         skip(60 * 60 * 24 * 16);
-        assertEq(manager.getCurrentMonthHarness(startTime), 1);
+        assertEq(uri_library.getCurrentMonth(startTime), 1);
         
         // ff 334 days to Mar 1 2026, should be month 12
         skip(60 * 60 * 24 * 334);
-        assertEq(manager.getCurrentMonthHarness(startTime), 12);
+        assertEq(uri_library.getCurrentMonth(startTime), 12);
     }
+
 
     function test_TokenURI() public {
         vm.prank(owner);

@@ -15,8 +15,6 @@ import {URILibrary} from "./URILibrary.sol";
 
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
-import "@BokkyPooBahsDateTimeLibrary/BokkyPooBahsDateTimeLibrary.sol";
-
 // 2 yr loan, repaid monthly interest only
 // 
 // borrow 1m owe 60k
@@ -33,6 +31,46 @@ import "@BokkyPooBahsDateTimeLibrary/BokkyPooBahsDateTimeLibrary.sol";
 
 contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ERC721EnumerableUpgradeable {
     using SafeERC20 for IERC20Metadata;
+    
+    event DepositProperty(
+        uint256 indexed propertyId,
+        uint256 liens,
+        uint256 max_ltv_ratio,
+        uint256 type_id,
+        address depositor
+    );
+    
+    event USDXBorrowed(
+        uint256 indexed propertyId,
+        uint256 value,
+        address borrower
+    );
+
+    event USDXRepaid(
+        uint256 indexed propertyId,
+        uint256 value,
+        address borrower
+    );
+
+    event InterestDeducted(
+        uint256 indexed propertyId,
+        uint256 value
+    );
+
+    event PaymentMissed(
+        uint256 indexed propertyId
+    );
+
+    event InterestPaymentDeposited(
+        uint256 indexed propertyId,
+        uint256 value,
+        address depositor
+    );
+    
+    event PropertyWithdrawn(
+        uint256 indexed propertyId,
+        address withdrawer
+    );
     
     mapping(uint256 => Property) private _properties;
 
@@ -54,9 +92,9 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
     }
     
     function initialize(address stable_manager, USDX usdx, URILibrary uri_library) public initializer {
+        __Ownable_init(stable_manager);
         __ERC721_init("Stable Property Deposit Manager", "SPD");
         __ERC721Enumerable_init();
-        __Ownable_init(stable_manager);
 
         _usdx = usdx;
         _uri_library = uri_library;
@@ -90,10 +128,11 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         property.prepaid_interest = 0;
         property.unpaid_interest = 0;
         property.n_missed_payments = 0;
+        _mint(depositor, propertyId);
 
         ensureDebtHistoryTabulated(propertyId);
 
-        _mint(depositor, propertyId);
+        emit DepositProperty(propertyId, liens, max_ltv_ratio, type_id, depositor);
     }
 
     // Called by Depositor or Stable to borrow against the property.
@@ -129,8 +168,9 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
             timestamp: block.timestamp
         }));
 
-        // emit events
         _usdx.mint(msg.sender, value);
+        
+        emit USDXBorrowed(propertyId, value, msg.sender);
     }
 
     // Property owner can repay the borrow with any accepted stablecoin
@@ -144,13 +184,14 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         ensureDebtHistoryTabulated(propertyId);
 
         if (address(stablecoinAddress) == address(_usdx)) {
+            IERC20Metadata(_usdx).safeTransferFrom(msg.sender, address(this), payment);
             _usdx.burn(payment);
         } else {
             stablecoinAddress.safeTransferFrom(msg.sender, owner(), payment);
         }
 
         uint8 decimals = stablecoinAddress.decimals();
-        uint256 normalized_payment = normalizePayment(decimals, payment);
+        uint256 normalized_payment = _uri_library.normalizePayment(decimals, payment);
         require(normalized_payment > 0, "Normalized Payment Cannot be Zero");
 
         require(normalized_payment <= property.outstanding_debt, "Cannot Overpay Debt");
@@ -163,7 +204,8 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
             value: normalized_payment,
             timestamp: block.timestamp
         }));
-        // emit events
+        
+        emit USDXRepaid(propertyId, payment, msg.sender);
     }
     
     // Property owner can make payment with a given stablecoin
@@ -177,13 +219,14 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         ensureDebtHistoryTabulated(propertyId);
 
         if (address(stablecoinAddress) == address(_usdx)) {
+            IERC20Metadata(_usdx).safeTransferFrom(msg.sender, owner(), payment);
             _usdx.burn(payment);
         } else {
             stablecoinAddress.safeTransferFrom(msg.sender, owner(), payment);
         }
 
         uint8 decimals = stablecoinAddress.decimals();
-        uint256 normalized_payment = normalizePayment(decimals, payment);
+        uint256 normalized_payment = _uri_library.normalizePayment(decimals, payment);
         require(normalized_payment > 0, "Normalized Payment Cannot be Zero");
         
         // If the payment more than covers unpaid interest then pay all the interest
@@ -195,6 +238,8 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         } else {
             property.unpaid_interest -= normalized_payment;
         }
+
+        emit InterestPaymentDeposited(propertyId, payment, msg.sender);
     }
 
     // Increment 
@@ -208,7 +253,8 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         require(property.outstanding_debt == 0, "Outstanding Debt must be Zero");
         
         property.is_withdrawn = true;
-        // emit withdrawn event
+
+        emit PropertyWithdrawn(propertyId, msg.sender);
     }
 
     // Stablecoin Management
@@ -234,24 +280,13 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
 
     // Takes a payment with a given amount of decimals and associated value
     // and returns the associated value of USDX (6 decimals)
-    function normalizePayment(uint8 decimals, uint256 value) public pure returns (uint256) {
-        if (decimals >= 6) {
-            return value * (10 ** (decimals - 6));
-        } else {
-            return value / (10 ** (6 - decimals));
-        }
-    }
-
-    function getCurrentMonth(uint256 starting_timestamp) internal view returns (uint256) {
-        return BokkyPooBahsDateTimeLibrary.diffMonths(starting_timestamp, block.timestamp);
-    }
     
-    function hasAccountExpired(uint256 propertyId) public view returns (bool) {
+    function hasAccountExpired(uint256 propertyId) internal view returns (bool) {
         require(propertyId < _nextPropertyId, "Invalid Property ID");
 
         Property storage property = _properties[propertyId];
 
-        return getCurrentMonth(property.deposit_timestamp) > 24;
+        return _uri_library.diffMonths(property.deposit_timestamp, block.timestamp) > 24;
     }
 
     function ensureDebtHistoryTabulated(uint256 propertyId) public {
@@ -260,7 +295,7 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         Property storage property = _properties[propertyId];
         Month[] storage borrow_history = property.borrow_history;
 
-        uint256 current_month = getCurrentMonth(property.deposit_timestamp);
+        uint256 current_month = _uri_library.getCurrentMonth(property.deposit_timestamp);
         bool has_finished = current_month > 24;
         uint256 should_be_up_to = Math.min(current_month + 1, 24);
 
@@ -275,20 +310,20 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
                     month.interest_owed_for_month = 0;
                     month.fully_tabulated = false;
                     month.starting_timestamp = property.deposit_timestamp;
-                    month.ending_timestamp = BokkyPooBahsDateTimeLibrary.addMonths(property.deposit_timestamp, 1) - 1;
+                    month.ending_timestamp = _uri_library.addMonths(property.deposit_timestamp, 1) - 1;
                 } else {
                     Month storage last_month = borrow_history[idx - 1];
                     if (!last_month.fully_tabulated) {
                         // fully tabulate last month
-                        tabulateMonthlyInterest(property, last_month);
+                        tabulateMonthlyInterest(propertyId, property, last_month);
                     }
                     Month storage month = borrow_history.push();
                     month.starting_outstanding_debt = last_month.ending_outstanding_debt;
                     month.ending_outstanding_debt = 0;
                     month.interest_owed_for_month = 0;
                     month.fully_tabulated = false;
-                    month.starting_timestamp = BokkyPooBahsDateTimeLibrary.addMonths(property.deposit_timestamp, idx);
-                    month.ending_timestamp = BokkyPooBahsDateTimeLibrary.addMonths(property.deposit_timestamp, idx + 1) - 1;
+                    month.starting_timestamp = _uri_library.addMonths(property.deposit_timestamp, idx);
+                    month.ending_timestamp = _uri_library.addMonths(property.deposit_timestamp, idx + 1) - 1;
                 }
                 idx += 1;
             }
@@ -297,12 +332,12 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
         if (has_finished) {
             if (!borrow_history[24].fully_tabulated) {
                 // tabulate final month
-                tabulateMonthlyInterest(property, borrow_history[24]);
+                tabulateMonthlyInterest(propertyId, property, borrow_history[24]);
             }
         }
     }
 
-    function tabulateMonthlyInterest(Property storage property, Month storage month) internal {
+    function tabulateMonthlyInterest(uint256 propertyId, Property storage property, Month storage month) internal {
         // renting money by the dollar * seconds
         // 0.06 per dollar * yr
         // 0.00016438356 per dollar * second
@@ -332,7 +367,7 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
             dollar_seconds = amt_borrowed * (month.ending_timestamp - month.starting_timestamp);
         }
 
-        uint256 monthly_interest = dollar_seconds * rate * denom;
+        uint256 monthly_interest = dollar_seconds / (month.ending_timestamp - month.starting_timestamp) * rate * denom;
 
         month.interest_owed_for_month = monthly_interest;
         month.ending_outstanding_debt = amt_borrowed;
@@ -342,10 +377,12 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
             property.n_missed_payments += 1;
             property.unpaid_interest += monthly_interest - property.prepaid_interest;
             property.prepaid_interest = 0;
-            // emit eventsk
+            emit PaymentMissed(propertyId);
         } else {
             property.prepaid_interest -= monthly_interest;
-            // emit events
+        }
+        if (monthly_interest > 0) {
+            emit InterestDeducted(propertyId, monthly_interest);
         }
 
         month.fully_tabulated = true;

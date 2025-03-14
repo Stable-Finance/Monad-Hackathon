@@ -8,7 +8,7 @@ During the Monad Hackathon, Stable brought pre-approved fixed-rate lending and l
 This repository serves as an aggregator of the resources and associated deployments that Matt and Winston built over the last 5 days.
 
 ### Associated Repositories
-1. [Monad Hackathon](https://github.com/Stable-Finance/Monad-Hackathon) - Smart contracts for USDX and Tokenized Real Estate 
+1. [Monad Hackathon](https://github.com/Stable-Finance/Monad-Hackathon/tree/master) - Smart contracts for USDX and Tokenized Real Estate 
 2. [Stable Front End](https://github.com/Stable-Finance/stable-front-end) - Front-end repository
 3. [Whitepaper](https://github.com/Stable-Finance/whitepaper) - USDX Whitepaper v0.0
 4. [Waifu Realty](https://github.com/Stable-Finance/Waifu-Realty) and [NFT Repo](https://github.com/Stable-Finance/NFT-Repo) - The code behind Waifu NFTs

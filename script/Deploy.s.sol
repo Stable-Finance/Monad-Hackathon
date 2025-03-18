@@ -3,7 +3,7 @@ pragma solidity ^0.8.13;
 
 import { Script, console } from "forge-std/Script.sol";
 import { USDX } from "../src/USDX.sol";
-import { URILibrary } from "../src/URILibrary.sol";
+import { HelperLibrary } from "../src/HelperLibrary.sol";
 import { StablePropertyDepositManagerV1 } from "../src/StablePropertyDepositManagerV1.sol";
 import { Upgrades } from "openzeppelin-foundry-upgrades/Upgrades.sol";
 
@@ -21,7 +21,7 @@ contract DeployScript is Script {
             abi.encodeCall(USDX.initialize, (vm.addr(deployerPrivateKey)))
         ));
 
-        URILibrary lib = new URILibrary();
+        HelperLibrary lib = new HelperLibrary();
 
         StablePropertyDepositManagerV1 deposit_mgr = StablePropertyDepositManagerV1(Upgrades.deployTransparentProxy(
             "StablePropertyDepositManager.sol",

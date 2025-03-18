@@ -11,7 +11,7 @@ import { PropertyInfo, DebtChangeEvent, Month, Property } from "./IStablePropert
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
 import { USDX } from "./USDX.sol";
-import {HelperLibrary} from "./HelperLibrary.sol";
+import { HelperLibrary } from "./HelperLibrary.sol";
 
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
@@ -29,8 +29,6 @@ import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/I
 
 // max borrow per property is 8,000,000 USDX
 uint256 constant MAX_BORROW_PER_PROPERTY = 8_000_000 * 1e6; // $8M in 6 decimals
-
-
 
 
 contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ERC721EnumerableUpgradeable {

@@ -11,7 +11,7 @@ import { PropertyInfo, DebtChangeEvent, Month, Property } from "./IStablePropert
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
 import { USDX } from "./USDX.sol";
-import {HelperLibrary} from "./HelperLibrary.sol";
+import { HelperLibrary } from "./HelperLibrary.sol";
 
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
@@ -27,6 +27,8 @@ import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/I
 // If depegs in the lower direction then borrowers swap into usdx and repay their loan with usdx
 // If depegs in the higher direction then borrowers swap out of usdx and repay their loan with usdc/usdt
 
+// max borrow per property is 8,000,000 USDX
+uint256 constant MAX_BORROW_PER_PROPERTY = 8_000_000 * 1e6; // $8M in 6 decimals
 
 
 contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ERC721EnumerableUpgradeable {
@@ -177,6 +179,9 @@ contract StablePropertyDepositManagerV1 is Initializable, OwnableUpgradeable, ER
             new_borrow_amt <= ((property.value - property.outstanding_debt) * property.max_ltv_ratio / 1e9),
             "Borrowing Exceeds Max LTV"
         );
+
+        // Enforce $8M max per property
+        require(new_borrow_amt <= MAX_BORROW_PER_PROPERTY, "Exceeds $8M Borrow Cap");
         
         // Make Borrow
         property.outstanding_debt += value;
